@@ -1,6 +1,7 @@
 from enum import Enum, unique
 from collections import namedtuple
 from typing import Union
+import struct
 
 # TODO: This is temporary for testing!
 class Vertex:
@@ -16,28 +17,66 @@ class Face:
 # TODO REMOVE ABOVE
 
 
+# noinspection PyInitNewSignature
 @unique
 class ElementPropertyType(Enum):
-    CHAR = (1, "char")
-    UCHAR = (1, "uchar")
-    SHORT = (2, "short")
-    USHORT = (2, "ushort")
-    INT = (4, "int")
-    UINT = (4, "uint")
-    FLOAT = (4, "float")
-    DOUBLE = (8, "double")
+    CHAR = (1, True, "char")
+    UCHAR = (1, False,"uchar")
+    SHORT = (2, True, "short")
+    USHORT = (2, False, "ushort")
+    INT = (4, True, "int")
+    UINT = (4, False, "uint")
+    FLOAT = (4, True, "float")
+    DOUBLE = (8, True, "double")
 
-    def __init__(self, byte_size, friendly_name):
+    def __init__(self, byte_size, signed, friendly_name):
         self.size_in_bytes = byte_size
+        self.signed = signed
         self.friendly_name = friendly_name
 
+    def encode_instance_to_bytes(self, obj, byte_order):
+        if self == ElementPropertyType.FLOAT or self == ElementPropertyType.DOUBLE:
+            # There isn't a native to_bytes method for doubles, irritatingly enough
+            format_string = '<' if byte_order == 'little' else '>'
+            format_string += 'f' if self == ElementPropertyType.FLOAT else 'd'
+
+            return struct.pack(format_string, obj)
+        else:
+            return obj.to_bytes(self.size_in_bytes, byteorder=byte_order, signed=self.signed)
+
+
+# noinspection PyUnusedLocal
+def encode_ascii_data(obj, endianness, data_type) -> str:
+    return str(obj)
+
+
+def encode_binary_data(obj, endianness, data_type) -> bytearray:
+    return data_type.encode_instance_to_bytes(obj, endianness)
+
+
+# noinspection PyInitNewSignature
 @unique
 class PlyFormatOptions(Enum):
-    ASCII = "ascii"
-    BINARY_LITTLE_ENDIAN = "binary_little_endian"
-    BINARY_BIG_ENDIAN = "binary_big_endian"
+    ASCII = ("ascii", "", encode_ascii_data, " ", "\n", "a+")
+    BINARY_LITTLE_ENDIAN = ("binary_little_endian", "little", encode_binary_data, b"", b"", "a+b")
+    BINARY_BIG_ENDIAN = ("binary_big_endian", "big", encode_binary_data, b"", b"", "a+b")
+
+    def __init__(self, friendly_name, byte_order, encoder, sep, linesep, filemode):
+        self.friendly_name = friendly_name
+        self.byte_order = byte_order
+        self.encoder = encoder
+        self.sep = sep
+        self.linesep = linesep
+        self.filemode = filemode
+
+    def concatenate_data(self, elements):
+        return self.sep.join(elements)
+
+    def encode_data(self, data, property_type):
+        return self.encoder(data, self.byte_order, property_type)
 
 
+# noinspection PyClassHasNoInit
 class ElementProperty(namedtuple('ElementProperty', 'name property_type')):
     """An element property. Each property consists of a name and a type associated with it. Permitted types are
     enumerated in the ElementPropertyType enum above."""
@@ -46,10 +85,11 @@ class ElementProperty(namedtuple('ElementProperty', 'name property_type')):
     def __str__(self):
         return "property " + self.property_type.friendly_name + " " + self.name + "\n"
 
-    def instance_str(self, obj) -> str:
-        return str(getattr(obj, self.name))
+    def instance_str(self, obj, ply_format) -> Union[str, bytearray]:
+        return ply_format.encode_data(getattr(obj, self.name), self.property_type)
 
 
+# noinspection PyClassHasNoInit
 class ListProperty(namedtuple('ListProperty', 'name count_type property_type')):
     """A list property. Each property contains a type describing the count, and a type of the elements."""
     __slots__ = ()
@@ -60,9 +100,11 @@ class ListProperty(namedtuple('ListProperty', 'name count_type property_type')):
         return str("property list " + self.count_type.friendly_name + " " + self.property_type.friendly_name + " " +
                    self.name + "\n")
 
-    def instance_str(self, obj) -> str:
+    def instance_str(self, obj, ply_format) -> Union[str, bytearray]:
         element_property = getattr(obj, self.name)
-        return str.rstrip(str(len(element_property)), ' ') + "".join(str(e) for e in element_property)
+        list_data = [ply_format.encode_data(len(element_property), self.count_type)]
+        list_data.extend(map(lambda e: ply_format.encode_data(e, self.property_type), element_property))
+        return ply_format.concatenate_data(list_data)
 
 
 class ElementSpecification:
@@ -75,8 +117,9 @@ class ElementSpecification:
     def add_property(self, element_property: Union[ElementProperty, ListProperty]):
         self.properties.append(element_property)
 
-    def instance_str(self, obj) -> str:
-        return "".join(e.instance_str(obj) for e in self.properties)
+    def instance_str(self, obj, ply_format) -> str:
+        elements = list(map(lambda e: e.instance_str(obj, ply_format), self.properties))
+        return ply_format.concatenate_data(elements) + ply_format.linesep
 
 
 class Ply:
@@ -106,7 +149,7 @@ class Ply:
     def write_header(self, filename, ply_format: PlyFormatOptions):
         with open(filename, 'w') as f:
             f.write("ply\n")
-            f.write("format " + ply_format.value + " 1.0\n")
+            f.write("format " + ply_format.friendly_name + " 1.0\n")
             f.write("comment written by plymit\n")
             for et in self.elementTypes:
                 num_such_elements = len(self.elementLists[et.name])
@@ -117,10 +160,10 @@ class Ply:
 
     def write(self, filename, ply_format):
         self.write_header(filename, ply_format)
-        with open(filename, 'a+') as f:
+        with open(filename, ply_format.filemode) as f:
             for et in self.elementTypes:
                 for element in self.elementLists[et.name]:
-                    f.write(" ".join(et.instance_str(element)) + "\n")
+                    f.write(et.instance_str(element, ply_format))
 
 if __name__ == "__main__":
     p = Ply()
@@ -140,4 +183,4 @@ if __name__ == "__main__":
     p.add_elements('face', [Face([0, 1, 2, 3]), Face([7, 6, 5, 4]), Face([0, 4, 5, 1]), Face([1, 5, 6, 2]),
                             Face([2, 6, 7, 3]), Face([3, 7, 4, 0])])
 
-    p.write('test.ply', PlyFormatOptions.ASCII)
+    p.write('test.ply', PlyFormatOptions.BINARY_LITTLE_ENDIAN)
