@@ -1,28 +1,13 @@
 from enum import Enum, unique
 from collections import namedtuple
 from typing import Union
-from typing import Generator
 import struct
-
-# TODO: This is temporary for testing!
-class Vertex:
-    def __init__(self, x, y, z):
-        self.x = x
-        self.y = y
-        self.z = z
-
-
-class Face:
-    def __init__(self, vertices):
-        self.vertex_index = vertices
-# TODO REMOVE ABOVE
-
 
 # noinspection PyInitNewSignature
 @unique
 class ElementPropertyType(Enum):
     CHAR = (1, True, "char")
-    UCHAR = (1, False,"uchar")
+    UCHAR = (1, False, "uchar")
     SHORT = (2, True, "short")
     USHORT = (2, False, "ushort")
     INT = (4, True, "int")
@@ -42,6 +27,14 @@ class ElementPropertyType(Enum):
             return struct.pack(format_string, obj)
         else:
             return obj.to_bytes(self.size_in_bytes, byteorder=byte_order, signed=self.signed)
+
+    def decode_instance_from_bytes(self, raw_bytes, byte_order):
+        if self == ElementPropertyType.FLOAT or self == ElementPropertyType.DOUBLE:
+            format_string = '<' if byte_order == 'little' else '>'
+            format_string += 'f' if self == ElementPropertyType.FLOAT else 'd'
+            return struct.unpack(format_string, raw_bytes)[0]
+        else:
+            return int.from_bytes(raw_bytes, byteorder=byte_order, signed=self.signed)
 
 
 # noinspection PyUnusedLocal
@@ -95,7 +88,7 @@ class ListProperty(namedtuple('ListProperty', 'name count_type property_type')):
     __slots__ = ()
 
     def __str__(self):
-        assert(self.count_type != ElementPropertyType.FLOAT and self.count_type != ElementPropertyType.DOUBLE)
+        assert (self.count_type != ElementPropertyType.FLOAT and self.count_type != ElementPropertyType.DOUBLE)
         return str("property list " + self.count_type.friendly_name + " " + self.property_type.friendly_name + " " +
                    self.name + "\n")
 
@@ -113,6 +106,11 @@ class ElementSpecification:
         self.name = name
         self.properties = []
 
+    def __eq__(self, other):
+        if isinstance(other, ElementSpecification):
+            return self.name == other.name and self.properties == other.properties
+        return False
+
     def add_property(self, element_property: Union[ElementProperty, ListProperty]):
         self.properties.append(element_property)
 
@@ -121,26 +119,31 @@ class ElementSpecification:
         return ply_format.concatenate_data(elements) + ply_format.linesep
 
 
-def token_stream(file):
+def token_stream(file, break_on_newline=True):
     """Word tokenizer. Also breaks on newlines."""
-    for line in file:
+    while True:
+        # Note: Cannot use 'for line in file', because it breaks ftell() due to hidden buffering in Python internals.
+        line = file.readline()
         for word in line.split(None):
             yield word
-        yield '\n'
+        if break_on_newline:
+            yield '\n'
 
 
 class PlyHeaderParser:
     """A simple parser to read PLY headers and assemble the information therein."""
+
     def __init__(self, filename):
         self.ply_format = None
         self.elementData = []
-        with open(filename, 'r') as f:
+
+        with open(filename, 'r', errors='ignore') as f:
             words_parsed = 0
             found_ply_magic_token = False
             gen = token_stream(f)
             for word in gen:
                 if word == "ply":
-                    assert(words_parsed == 0)
+                    assert (words_parsed == 0)
                     found_ply_magic_token = True
                 elif word == "format":
                     self.parse_keyword_format(gen)
@@ -152,9 +155,11 @@ class PlyHeaderParser:
                     self.parse_keyword_property(gen)
                 elif word == "end_header":
                     break
+                elif word != '\n':
+                    assert False  # This is not supposed to happen.
                 words_parsed += 1
-            assert(found_ply_magic_token is True)
-            assert(self.ply_format is not None)
+            assert (found_ply_magic_token is True)
+            assert (self.ply_format is not None)
             self.body_offset = f.tell()
 
     CountSpecificationPair = namedtuple('CountSpecificationPair', 'count specification')
@@ -168,14 +173,14 @@ class PlyHeaderParser:
         return word
 
     def parse_keyword_format(self, gen):
-        assert(self.ply_format is None)
+        assert (self.ply_format is None)
         format_type = self.parse_next_word(gen)
         for format_option in PlyFormatOptions:
             if format_type == format_option.friendly_name:
                 self.ply_format = format_option
                 break
         version = self.parse_next_word(gen)
-        assert(version == '1.0')
+        assert (version == '1.0')
 
     @staticmethod
     def parse_keyword_comment(gen):
@@ -190,7 +195,7 @@ class PlyHeaderParser:
         self.elementData.append(PlyHeaderParser.CountSpecificationPair(element_count, specification))
 
     def parse_keyword_property(self, gen):
-        assert(self.currentParsingElement is not None)
+        assert (len(self.elementData) > 0)
         next_word = self.parse_next_word(gen)
         if next_word == "list":
             count_property_type = self.get_property_type(self.parse_next_word(gen))
@@ -218,6 +223,44 @@ class Ply:
         http://www.dcs.ed.ac.uk/teaching/cs4/www/graphics/Web/ply.html
     """
 
+    # noinspection PyUnusedLocal
+    @staticmethod
+    def _parse_body_ascii_element(file, property_type, ply_format, ascii_word_gen):
+        word = next(ascii_word_gen)
+        if property_type == ElementPropertyType.FLOAT or property_type == ElementPropertyType.DOUBLE:
+            return float(word)
+        else:
+            return int(word)
+
+    @staticmethod
+    def _parse_body_binary_element(file, property_type, ply_format):
+        raw_bytes = file.read(property_type.size_in_bytes)
+        return property_type.decode_instance_from_bytes(raw_bytes, ply_format.byte_order)
+
+    def _parse_body(self, file, header):
+        if header.ply_format == PlyFormatOptions.ASCII:
+            ascii_word_gen = token_stream(file, break_on_newline=False)
+            parse_function = lambda f, prop, pf: self._parse_body_ascii_element(f, prop, pf, ascii_word_gen)
+        else:
+            parse_function = self._parse_body_binary_element
+
+        for count_element_pair in header.elementData:
+            count, element_type = (count_element_pair.count, count_element_pair.specification)
+            self.elementLists[element_type.name] = []
+            element_tuple_type = namedtuple(element_type.name, map(lambda x: x.name, element_type.properties))
+            for element_id in range(count):
+                raw_data = []
+                for pt in element_type.properties:
+                    if isinstance(pt, ListProperty):
+                        new_list = []
+                        num_elements_in_list = parse_function(file, pt.count_type, header.ply_format)
+                        for list_element in range(num_elements_in_list):
+                            new_list.append(parse_function(file, pt.property_type, header.ply_format))
+                        raw_data.append(new_list)
+                    else:
+                        raw_data.append(parse_function(file, pt.property_type, header.ply_format))
+                self.elementLists[element_type.name].append(element_tuple_type(*raw_data))
+
     def __init__(self, filename=None):
         """Optionally reads a ply file and populates the internal structures of this object to conform to them.
         It is important to note that there is no requirement in the ply spec that a ply file contain more than one line.
@@ -229,9 +272,15 @@ class Ply:
 
         if filename is not None:
             parser = PlyHeaderParser(filename)
+            self.elementTypes = list(map(lambda x: x.specification, parser.elementData))
             with open(filename, parser.ply_format.read_filemode) as f:
                 f.seek(parser.body_offset)
-                # TODO: Read the elements!
+                self._parse_body(f, parser)
+
+    def __eq__(self, other):
+        if isinstance(other, Ply):
+            return self.elementTypes == other.elementTypes and self.elementLists == other.elementLists
+        return False
 
     def add_element_type(self, element_type: ElementSpecification):
         self.elementTypes.append(element_type)
@@ -262,6 +311,7 @@ class Ply:
                 for element in self.elementLists[et.name]:
                     f.write(et.instance_str(element, ply_format))
 
+
 if __name__ == "__main__":
     p = Ply()
     vType = ElementSpecification('vertex')
@@ -270,14 +320,25 @@ if __name__ == "__main__":
     vType.add_property(ElementProperty('z', ElementPropertyType.FLOAT))
     p.add_element_type(vType)
 
-    p.add_elements('vertex', [Vertex(0, 0, 0), Vertex(0, 0, 1), Vertex(0, 1, 1), Vertex(0, 1, 0), Vertex(1, 0, 0),
-                              Vertex(1, 0, 1), Vertex(1, 1, 1), Vertex(1, 1, 0)])
+    VertexType = namedtuple('vertex', 'x y z')
+
+    p.add_elements('vertex', [VertexType(0, 0, 0), VertexType(0, 0, 1), VertexType(0, 1, 1), VertexType(0, 1, 0),
+                              VertexType(1, 0, 0), VertexType(1, 0, 1), VertexType(1, 1, 1), VertexType(1, 1, 0)])
 
     fType = ElementSpecification('face')
     fType.add_property(ListProperty('vertex_index', ElementPropertyType.UCHAR, ElementPropertyType.INT))
     p.add_element_type(fType)
 
-    p.add_elements('face', [Face([0, 1, 2, 3]), Face([7, 6, 5, 4]), Face([0, 4, 5, 1]), Face([1, 5, 6, 2]),
-                            Face([2, 6, 7, 3]), Face([3, 7, 4, 0])])
+    FaceType = namedtuple('face', 'vertex_index')
 
-    p.write('test.ply', PlyFormatOptions.BINARY_LITTLE_ENDIAN)
+    p.add_elements('face', [FaceType([0, 1, 2, 3]), FaceType([7, 6, 5, 4]), FaceType([0, 4, 5, 1]),
+                            FaceType([1, 5, 6, 2]), FaceType([2, 6, 7, 3]), FaceType([3, 7, 4, 0])])
+
+    if __name__ == '__main__':
+        for possible_format in PlyFormatOptions:
+            print('Validating that writing and reading a ply of format ' + possible_format.friendly_name +
+                  ' produces the same ply.')
+            p.write('test.ply', possible_format)
+            p2 = Ply('test.ply')
+            assert(p == p2)
+
