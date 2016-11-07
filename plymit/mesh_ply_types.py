@@ -1,10 +1,6 @@
-class Vertex:
-    def __init__(self, x, y, z):
-        self.x = x
-        self.y = y
-        self.z = z
+from collections import namedtuple
 
-
-class Face:
-    def __init__(self, vertices):
-        self.vertex_index = vertices
+Vertex = namedtuple('Vertex', 'x y z')
+Face = namedtuple('Face', 'vertex_index')
+Triangle = namedtuple('Triangle', 'i0 i1 i2')
+Edge = namedtuple('Edge', 'start end')
