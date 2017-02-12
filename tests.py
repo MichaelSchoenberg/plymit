@@ -1,26 +1,15 @@
-from plymit import Ply, ElementSpecification, ElementProperty, ElementPropertyType, ListProperty, PlyFormatOptions
-from collections import namedtuple
+from plymit import Ply, PlyFormatOptions, VertexType, FaceType
 
-p = Ply()
-vType = ElementSpecification('vertex')
-vType.add_property(ElementProperty('x', ElementPropertyType.FLOAT))
-vType.add_property(ElementProperty('y', ElementPropertyType.FLOAT))
-vType.add_property(ElementProperty('z', ElementPropertyType.FLOAT))
-p.add_element_type(vType)
+p = Ply(None, VertexType, FaceType)
+p.add_bulk_elements(VertexType.name, [VertexType(0, 0, 0), VertexType(0, 0, 1), VertexType(0, 1, 1),
+                                      VertexType(0, 1, 0), VertexType(1, 0, 0), VertexType(1, 0, 1),
+                                      VertexType(1, 1, 1), VertexType(1, 1, 0)])
 
-VertexType = namedtuple('vertex', 'x y z')
+p.add_elements(FaceType([0, 1, 2, 3]), FaceType([7, 6, 5, 4]), FaceType([0, 4, 5, 1]),
+               FaceType([1, 5, 6, 2]), FaceType([2, 6, 7, 3]), FaceType([3, 7, 4, 0]))
 
-p.add_elements('vertex', [VertexType(0, 0, 0), VertexType(0, 0, 1), VertexType(0, 1, 1), VertexType(0, 1, 0),
-                          VertexType(1, 0, 0), VertexType(1, 0, 1), VertexType(1, 1, 1), VertexType(1, 1, 0)])
-
-fType = ElementSpecification('face')
-fType.add_property(ListProperty('vertex_index', ElementPropertyType.UCHAR, ElementPropertyType.INT))
-p.add_element_type(fType)
-
-FaceType = namedtuple('face', 'vertex_index')
-
-p.add_elements('face', [FaceType([0, 1, 2, 3]), FaceType([7, 6, 5, 4]), FaceType([0, 4, 5, 1]),
-                        FaceType([1, 5, 6, 2]), FaceType([2, 6, 7, 3]), FaceType([3, 7, 4, 0])])
+assert(len(p.get_elements_of_type(VertexType)) == 8)
+assert(len(p.get_elements_of_type(FaceType)) == 6)
 
 if __name__ == '__main__':
     for possible_format in PlyFormatOptions:

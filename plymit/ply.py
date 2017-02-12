@@ -3,6 +3,7 @@ from collections import namedtuple
 from typing import Union
 import struct
 
+
 # noinspection PyInitNewSignature
 @unique
 class ElementPropertyType(Enum):
@@ -102,9 +103,9 @@ class ListProperty(namedtuple('ListProperty', 'name count_type property_type')):
 class ElementSpecification:
     """Specification of an element type. An element type contains an arbitrary list of properties."""
 
-    def __init__(self, name):
+    def __init__(self, name, *properties):
         self.name = name
-        self.properties = []
+        self.properties = list(properties)
 
     def __eq__(self, other):
         if isinstance(other, ElementSpecification):
@@ -117,6 +118,14 @@ class ElementSpecification:
     def instance_str(self, obj, ply_format) -> str:
         elements = list(map(lambda e: e.instance_str(obj, ply_format), self.properties))
         return ply_format.concatenate_data(elements) + ply_format.linesep
+
+    @property
+    def as_named_tuple(self):
+        return namedtuple(self.name, list(map(lambda e: e.name, self.properties)))
+
+    def __call__(self, *args):
+        tuple_type = self.as_named_tuple
+        return tuple_type(*args)
 
 
 def token_stream(file, break_on_newline=True):
@@ -261,7 +270,7 @@ class Ply:
                         raw_data.append(parse_function(file, pt.property_type, header.ply_format))
                 self.elementLists[element_type.name].append(element_tuple_type(*raw_data))
 
-    def __init__(self, filename=None):
+    def __init__(self, filename=None, *element_type):
         """Optionally reads a ply file and populates the internal structures of this object to conform to them.
         It is important to note that there is no requirement in the ply spec that a ply file contain more than one line.
         That is, all that is important is that there are separators between the keywords and values."""
@@ -272,25 +281,35 @@ class Ply:
 
         if filename is not None:
             parser = PlyHeaderParser(filename)
-            self.elementTypes = list(map(lambda x: x.specification, parser.elementData))
+            self.elementTypes.extend(list(map(lambda x: x.specification, parser.elementData)))
             with open(filename, parser.ply_format.read_filemode) as f:
                 f.seek(parser.body_offset)
                 self._parse_body(f, parser)
+
+        self.add_element_type(*element_type)
 
     def __eq__(self, other):
         if isinstance(other, Ply):
             return self.elementTypes == other.elementTypes and self.elementLists == other.elementLists
         return False
 
-    def add_element_type(self, element_type: ElementSpecification):
-        self.elementTypes.append(element_type)
-        self.elementLists[element_type.name] = []
+    def add_element_type(self, *element_type):
+        for i in element_type:
+            self.elementTypes.append(i)
+            self.elementLists[i.name] = []
 
-    def add_elements(self, type_name, elements):
+    def add_elements(self, *elements):
+        for i in elements:
+            self.elementLists[i.__class__.__name__].append(i)
+
+    def add_bulk_elements(self, type_name, elements):
         try:
             self.elementLists[type_name].extend(elements)
         except TypeError:
             self.elementLists[type_name].append(elements)
+
+    def get_elements_of_type(self, type):
+        return self.elementLists[type.name]
 
     def write_header(self, filename, ply_format: PlyFormatOptions):
         with open(filename, 'w') as f:
