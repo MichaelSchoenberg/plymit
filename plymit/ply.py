@@ -112,6 +112,9 @@ class ElementSpecification:
             return self.name == other.name and self.properties == other.properties
         return False
 
+    def __hash__(self):
+        return hash(self.name)
+
     def add_property(self, element_property: Union[ElementProperty, ListProperty]):
         self.properties.append(element_property)
 
@@ -125,7 +128,9 @@ class ElementSpecification:
 
     def __call__(self, *args):
         tuple_type = self.as_named_tuple
-        return tuple_type(*args)
+        setattr(tuple_type, 'plymit_type_backreference', self)  # Embed a back-reference to the specification
+        result = tuple_type(*args)
+        return result
 
 
 def token_stream(file, break_on_newline=True):
@@ -270,23 +275,24 @@ class Ply:
                         raw_data.append(parse_function(file, pt.property_type, header.ply_format))
                 self.elementLists[element_type.name].append(element_tuple_type(*raw_data))
 
-    def __init__(self, filename=None, *element_type):
-        """Optionally reads a ply file and populates the internal structures of this object to conform to them.
+    def __init__(self, filename=None):
+        """Creates a new ply object. Optionally reads a ply file and populates the internal structures of this object
+        to conform to the input file.
         It is important to note that there is no requirement in the ply spec that a ply file contain more than one line.
-        That is, all that is important is that there are separators between the keywords and values."""
+        That is, all that is important is that there are separators between the keywords and values.
+        Note also that this format guarantees that each type is defined only once, but does not guarantee the order
+        of type definitions in the ply header."""
         # List of element types, of type ElementSpecification.
-        self.elementTypes = []
+        self.elementTypes = set()
         # A dictionary keyed by ElementSpecification name containing a list of the actual members of said elements.
         self.elementLists = {}
 
         if filename is not None:
             parser = PlyHeaderParser(filename)
-            self.elementTypes.extend(list(map(lambda x: x.specification, parser.elementData)))
+            self.elementTypes = self.elementTypes.union(set(map(lambda x: x.specification, parser.elementData)))
             with open(filename, parser.ply_format.read_filemode) as f:
                 f.seek(parser.body_offset)
                 self._parse_body(f, parser)
-
-        self.add_element_type(*element_type)
 
     def __eq__(self, other):
         if isinstance(other, Ply):
@@ -294,22 +300,30 @@ class Ply:
         return False
 
     def add_element_type(self, *element_type):
+        """Add support to this ply file for any number of element types."""
         for i in element_type:
-            self.elementTypes.append(i)
-            self.elementLists[i.name] = []
+            self.elementTypes.add(i)
+            if i.name not in self.elementLists:
+                self.elementLists[i.name] = []
 
     def add_elements(self, *elements):
+        """Adds any number of elements of any known type."""
         for i in elements:
+            self.add_element_type(i.plymit_type_backreference)
             self.elementLists[i.__class__.__name__].append(i)
 
-    def add_bulk_elements(self, type_name, elements):
-        try:
-            self.elementLists[type_name].extend(elements)
-        except TypeError:
-            self.elementLists[type_name].append(elements)
+    def add_bulk_elements(self, elements):
+        """Adds any number of elements of the same type."""
+        if len(elements) > 0:
+            element_type = elements[0].plymit_type_backreference
+            self.add_element_type(element_type)
+            try:
+                self.elementLists[element_type.name].extend(elements)
+            except TypeError:
+                self.elementLists[element_type.name].append(elements)
 
-    def get_elements_of_type(self, type):
-        return self.elementLists[type.name]
+    def get_elements_of_type(self, element_type):
+        return self.elementLists[element_type.name]
 
     def write_header(self, filename, ply_format: PlyFormatOptions):
         with open(filename, 'w') as f:
