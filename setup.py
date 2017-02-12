@@ -10,7 +10,7 @@ setup(name="plymit",
       classifiers=[
             'Development Status :: 4 - Beta',
             'Intended Audience :: Developers',
-            'Topic :: Mesh Processing :: File IO',
+            'Topic :: Multimedia :: Graphics',
             'License :: OSI Approved :: MIT License',
             'Programming Language :: Python :: 3.5'
       ],
