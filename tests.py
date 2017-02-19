@@ -18,7 +18,7 @@ assert(len(p.get_elements_of_type(FaceType)) == 6)
 
 # For demonstration purposes, here's how you define a new type for the ply to know about. See mesh_ply_types.py for more
 # examples.
-QuadType = ElementSpecification('triangle',
+QuadType = ElementSpecification('quad',
                                 ElementProperty('i0', ElementPropertyType.UINT),
                                 ElementProperty('i1', ElementPropertyType.UINT),
                                 ElementProperty('i2', ElementPropertyType.UINT),
