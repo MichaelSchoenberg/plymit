@@ -289,7 +289,7 @@ class Ply:
 
         if filename is not None:
             parser = PlyHeaderParser(filename)
-            self.elementTypes = self.elementTypes.union(set(map(lambda x: x.specification, parser.elementData)))
+            self.elementTypes = self.elementTypes.union(set([(x.specification, i) for i,x in enumerate(parser.elementData)]))
             with open(filename, parser.ply_format.read_filemode) as f:
                 f.seek(parser.body_offset)
                 self._parse_body(f, parser)
@@ -302,7 +302,7 @@ class Ply:
     def add_element_type(self, *element_type):
         """Add support to this ply file for any number of element types."""
         for i in element_type:
-            self.elementTypes.add(i)
+            self.elementTypes.add((i, len(self.elementTypes)))
             if i.name not in self.elementLists:
                 self.elementLists[i.name] = []
 
@@ -330,16 +330,18 @@ class Ply:
             f.write("ply\n")
             f.write("format " + ply_format.friendly_name + " 1.0\n")
             f.write("comment written by plymit\n")
-            for et in self.elementTypes:
-                num_such_elements = len(self.elementLists[et.name])
-                f.write("element " + et.name + " " + str(num_such_elements) + "\n")
-                for pt in et.properties:
+            sorted_type_list = sorted(list(self.elementTypes), key=lambda x: x[1])
+            for et in sorted_type_list:
+                num_such_elements = len(self.elementLists[et[0].name])
+                f.write("element " + et[0].name + " " + str(num_such_elements) + "\n")
+                for pt in et[0].properties:
                     f.write(str(pt))
             f.write("end_header\n")
 
     def write(self, filename, ply_format):
         self.write_header(filename, ply_format)
         with open(filename, ply_format.write_filemode) as f:
-            for et in self.elementTypes:
-                for element in self.elementLists[et.name]:
-                    f.write(et.instance_str(element, ply_format))
+            sorted_type_list = sorted(list(self.elementTypes), key=lambda x: x[1])
+            for et in sorted_type_list:
+                for element in self.elementLists[et[0].name]:
+                    f.write(et[0].instance_str(element, ply_format))

@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name="plymit",
-      version='1.0.0',
+      version='1.0.1',
       description='PLY mesh file reader and writer, permissively licensed.',
       url='http://github.com/MichaelSchoenberg/plymit',
       author='Michael Schoenberg',
